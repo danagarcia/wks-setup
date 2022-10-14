@@ -1,0 +1,157 @@
+---
+- name: Workstation Setup
+  hosts: localhost
+  connection: local
+  vars_prompt:
+  - name: git_name
+    prompt: "Enter your name for Git"
+    private: false
+
+  - name: git_email
+    prompt: "Enter your email for Git"
+    private: false
+  tasks:
+  - name: Check Window Buttons Location Setting
+    shell:
+      cmd: "gsettings get org.gnome.desktop.wm.preferences button-layout"
+    register: location
+    changed_when: false
+
+  - name: Move Window Buttons To Top Left
+    shell:
+      cmd: "gsettings set org.gnome.desktop.wm.preferences button-layout close,minimize,maximize:"
+    when: location.stdout != "'close,minimize,maximize:'"
+
+  - name: Install Dev Tools
+    become: true
+    ansible.builtin.apt:
+      name:
+      - git
+      - zsh
+      - nano
+      - vim
+      - python3.10
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+
+  - name: Check Git User Name
+    ansible.builtin.shell:
+      cmd: "git config --global --get user.name"
+    register: cur_git_user
+    changed_when: false
+
+  - name: Configure Git User Name
+    ansible.builtin.shell:
+      cmd: 'git config --global user.name "{{ git_name }}"'
+    when: cur_git_user.stdout != git_name
+
+  - name: Check Git User Email
+    ansible.builtin.shell:
+      cmd: "git config --global --get user.email"
+    register: cur_git_email
+    changed_when: false
+
+  - name: Configure Git User Email
+    ansible.builtin.shell:
+      cmd: 'git config --global user.email "{{ git_email }}"'
+    when: cur_git_email.stdout != git_email
+
+  - name: Check Default Shell
+    ansible.builtin.user:
+      name: "{{ ansible_env.USER }}"
+    register: user
+
+  - name: Change Default Shell to Zsh
+    become: true
+    ansible.builtin.shell:
+      cmd: chsh -s /bin/zsh
+    when: user.shell != "/bin/zsh"
+
+  - name: Check For Powerlevel10k Font
+    ansible.builtin.stat:
+      path: "{{ ansible_env.HOME }}/.local/share/fonts/MesloLGS NF Regular.ttf"
+    register: font
+
+  - name: Download Powerlevel10k Fonts
+    ansible.builtin.get_url:
+      url: "{{ item }}"
+      dest: "{{ ansible_env.HOME }}/.local/share/fonts"
+    loop:
+      - https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Regular.ttf
+      - https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Bold.ttf
+      - https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Italic.ttf
+      - https://github.com/romkatv/powerlevel10k-media/raw/master/MesloLGS%20NF%20Bold%20Italic.ttf
+    when: not font.stat.exists
+
+  - name: Check for Powerlevel10k
+    ansible.builtin.stat:
+      path: "{{ ansible_env.HOME }}/powerlevel10k"
+    register: repo
+
+  - name: Download Powerlevel10k
+    ansible.builtin.git:
+      repo: https://github.com/romkatv/powerlevel10k.git
+      dest: "{{ ansible_env.HOME }}"
+    when: not repo.stat.exists
+
+  - name: Enable Powerlevel10k for Zsh
+    ansible.builtin.lineinfile:
+      path: "{{ ansible_env.HOME }}/.zshrc"
+      line: source ~/powerlevel10k/powerlevel10k.zsh-theme
+      
+  - name: Install VS Code
+    become: true
+    community.general.snap:
+      name: code
+      classic: true
+
+  - name: Check if keyring directory exists
+    ansible.builtin.stat:
+      path: /etc/apt/keyrings
+    register: dir_data
+
+  - name: Directory exists skipping creation
+    ansible.builtin.debug:
+      msg: "Apt keyrings directory already exists, skipping creation"
+    when: dir_data.stat.exists
+
+  - name: Create apt keyring directory
+    become: true
+    ansible.builtin.file:
+      path: /etc/apt/keyrings
+      state: directory
+    when: not dir_data.stat.exists
+
+  - name: Check if Docker repository GPG key is present
+    ansible.builtin.stat:
+      path: /etc/apt/keyrings/docker.gpg
+    register: gpg_data
+
+  - name: GPG key exists skipping download
+    ansible.builtin.debug:
+      msg: "GPG key prevously downloaded, skipping download"
+    when: gpg_data.stat.exists
+
+  - name: Get Docker repository GPG key
+    become: true
+    ansible.builtin.shell:
+      cmd: "curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg"
+    when: not gpg_data.stat.exists
+
+  - name: Add Docker repository
+    become: true
+    ansible.builtin.apt_repository:
+      repo: "deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+      state: present
+
+  - name: Install or update Docker
+    become: true
+    ansible.builtin.apt:
+      name:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+        - docker-compose-plugin
+      state: latest
